@@ -196,8 +196,8 @@ bash scripts/destroy-cluster.sh
 ```
 
 Requirements: Docker, kubectl, kind. CI (`.github/workflows/reliability-lab-ci.yml`)
-runs steps 1–4 on every push plus `pytest` and manifest validation
-(kubeconform + `kubectl apply --dry-run=client`).
+runs steps 1–4 on every push plus `pytest` and strict manifest validation with
+`kubeconform`.
 
 ## Honest scope
 
