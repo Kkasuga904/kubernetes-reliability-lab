@@ -8,9 +8,10 @@ and does the Service send traffic to a replacement before it is Ready?
 ## Hypothesis
 
 The Deployment's ReplicaSet controller observes desired (3) vs actual replicas,
-creates a replacement Pod, and the Service only routes to it after the
-readinessProbe succeeds. One Pod dying should not cause user-visible downtime
-with 3 replicas.
+creates a replacement Pod. After the readinessProbe succeeds and endpoint
+state propagates, the replacement becomes eligible for new Service traffic.
+With 3 replicas, surviving Ready endpoints should continue serving during one
+Pod's replacement; this does not guarantee every in-flight request survives.
 
 ## Setup
 
@@ -39,13 +40,16 @@ kubectl -n reliability-lab describe rs -l app=web | head -30
 ## Expected behavior
 
 Per the ReplicaSet reconciliation loop: the controller notices the replica
-shortfall and creates a replacement. The new Pod receives traffic only after
-`readinessProbe` on `/ready` succeeds; until then its EndpointSlice condition
-is `ready: false`.
+shortfall and creates a replacement. The replacement is not eligible for new
+Service traffic until `readinessProbe` on `/ready` succeeds and the resulting
+EndpointSlice/data-plane state propagates; until then its EndpointSlice
+condition is `ready: false`.
 
 ## Observed behavior
 
-**PASS** (validated 2026-09-18, kind v0.33.0 / k8s v1.37.0).
+**PARTIAL** (validated 2026-09-18, kind v0.33.0 / k8s v1.37.0).
+ReplicaSet replacement was observed, but a continuous request trace was not
+captured, so no zero-request-loss or continuity result is claimed.
 
 Deleted `web-d55f6549f-fxvsx` while 2 other Pods were Ready. Within seconds:
 
@@ -56,13 +60,9 @@ Deleted `web-d55f6549f-fxvsx` while 2 other Pods were Ready. Within seconds:
 38s  Normal  Started           pod/web-d55f6549f-zhjm5   Container started
 ```
 
-`kubectl get pods` showed the replacement `Running` shortly after; the two
-surviving Ready Pods kept the Service answered throughout (no rollout, no
-restarts on survivors, restartCount untouched).
-
-(Note: at delete time a third Pod was already `Terminating` from an HPA
-scale-down 3->2 — see experiment 07. The replacement still converged the
-ReplicaSet to the HPA-desired count.)
+`kubectl get pods` showed the replacement `Running` shortly after; two surviving
+Pods remained Ready (no rollout, no restarts on survivors, restartCount
+untouched). Continuous Service responses were not recorded during this run.
 
 ## Explanation
 
@@ -70,8 +70,9 @@ The deleted Pod object was never resurrected. The ReplicaSet controller's
 reconciliation loop observed actual < desired replicas and created a *new* Pod
 object (`SuccessfulCreate` by `replicaset/...`, not by kubelet). Scheduling,
 image pull (already cached), container start, then readiness gating happened as
-separate steps, each visible in events. Service continuity came from the
-*surviving* Ready endpoints, not from the replacement being fast.
+separate steps, each visible in events. Any continuity during replacement would
+depend on the *surviving* Ready endpoints, not on the replacement being fast;
+this run did not capture a continuous request trace to validate that outcome.
 
 ## What this mechanism guarantees
 

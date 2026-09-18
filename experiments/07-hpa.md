@@ -16,7 +16,7 @@ load — same traffic, different scaling decision.
 ## Setup
 
 - metrics-server installed (see `scripts/create-cluster.sh`)
-- HPA `min 2 / max 6 / target CPU 50%`, Pod requests `100m`
+- HPA `min 3 / max 6 / target CPU 50%`, Pod requests `100m`
 
 ## Procedure
 
@@ -71,10 +71,12 @@ what this validates.
 
 HPA computed average utilization against the declared `requests.cpu=100m`, not
 against the 500m limit or Node capacity. The single hot Pod's ~450m dominated
-the average and pushed it over 50%, hence 6 replicas. Had `requests` been 400m,
-identical load would have read ~20% and scaled nothing — same traffic, opposite
-decision. Scale-down waited out the 60s stabilization window, stepping 6->5->3
-instead of flapping straight to 3.
+the average and pushed it over 50%, hence 6 replicas. For the same observed CPU
+values, a 400m request would produce roughly one quarter of the reported
+utilization and would likely fall below the 50% target. That configuration was
+not run, so no scaling outcome is claimed for it. Scale-down returned through
+6->5->3 after load; the configured 60s stabilization window contributes to the
+delay, alongside HPA sync and metrics timing.
 
 ## What this mechanism guarantees
 

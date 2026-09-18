@@ -7,10 +7,11 @@ survive? Does the preStop hook + `terminationGracePeriodSeconds: 30` matter?
 
 ## Hypothesis
 
-Old Pods receive SIGTERM, are removed from Endpoints, finish in-flight requests
-within the grace period, and log the shutdown markers. A request longer than the
-grace period is cut off. "Zero downtime" holds only while requests drain faster
-than the grace budget and replacements become Ready in time.
+During Pod termination, EndpointSlice readiness changes, the preStop hook, and
+SIGTERM/application shutdown should provide a bounded opportunity to stop new
+routing and finish in-flight work. Their propagation and ordering are not an
+unconditional guarantee. The tested claim is limited to whether this one 20s
+request completes within the configured budget.
 
 ## Setup
 
@@ -48,9 +49,11 @@ kubectl -n reliability-lab get endpointslice -l kubernetes.io/service-name=web -
 
 ## Expected behavior
 
-SIGTERM -> preStop sleep (5s) -> uvicorn drains (≤25s) -> Endpoints removal
-propagates -> replacement Pods Ready -> rollout completes. Requests exceeding
-30s are killed.
+Kubernetes begins termination, marks the endpoint terminating/not ready, runs
+the 5s preStop hook, and then sends SIGTERM to the container. EndpointSlice and
+data-plane propagation occur asynchronously; no strict cross-component order is
+assumed. The hook and Uvicorn shutdown share the 30s Pod termination budget.
+This run expects the selected 20s request to finish, not every request.
 
 ## Observed behavior
 
@@ -75,18 +78,17 @@ Received SIGTERM - starting graceful shutdown (in-flight requests drain first)
 ```
 
 All old Pods logged `Received SIGTERM`; rollout completed with
-`maxUnavailable: 1` and zero failed requests in this run. The >grace-period
+`maxUnavailable: 1`, and the single measured request did not fail. The >grace-period
 contrast case (`/slow?duration=60` vs 30s grace) was **not executed** — no claim
 is made about it beyond the design reading.
 
 ## Explanation
 
-SIGTERM arrived after endpoint removal had begun (helped by the 5s preStop
-sleep); uvicorn's 25s graceful window (inside the 30s Pod grace) let the 20s
-request finish before process exit. "Zero downtime" held here because the
-request (20s) fit inside the drain budget (30s) AND replacements became Ready in
-time — change either condition and the conclusion changes, which is exactly what
-the guarantees table says.
+The observed request had already started before termination and completed before
+process exit. The 5s preStop hook and Uvicorn's graceful shutdown operated
+inside the shared 30s Pod termination budget. This single observation does not
+establish exact EndpointSlice-to-SIGTERM ordering, general zero downtime, or
+survival for all requests.
 
 ## What this mechanism guarantees
 

@@ -4,9 +4,12 @@ metadata:
   name: web
   namespace: reliability-lab
 spec:
-  # With replicas=3, minAvailable=2 tolerates exactly 1 voluntary
-  # disruption (drain, rollout with maxUnavailable=1). It does NOT
-  # protect against crashes / node failures (involuntary disruptions).
+  # With replicas=3 and minAvailable=2, the PDB allows one voluntary
+  # eviction at a time through the Eviction API, such as during node drain.
+  # Deployment rolling updates are governed separately by maxUnavailable and
+  # maxSurge. Design both consistently; the PDB does not directly control a
+  # normal Deployment rollout. It also cannot prevent crashes, direct Pod
+  # deletion, liveness restarts, Node failure, or application failure.
   minAvailable: 2
   selector:
     matchLabels:

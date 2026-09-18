@@ -19,7 +19,8 @@ and deployment conditions — as reproducible experiments with evidence.
 
 ## What this project demonstrates
 
-- Controller self-healing: a deleted Pod is replaced, traffic gated by readiness
+- Controller self-healing: a deleted Pod is replaced; readiness controls its
+  eligibility for new Service traffic after control-plane/data-plane propagation
 - `Running != Ready`: readiness failure removes endpoints without restarts
 - Liveness failure restarts the container (process recovery, not traffic gating)
 - Startup probe protection for slow-starting containers
@@ -39,7 +40,7 @@ flowchart LR
   deploy["Deployment web<br/>replicas 3, RollingUpdate<br/>maxUnavailable 1 / maxSurge 1"] -..-> pod1
   deploy -..-> pod2
   deploy -..-> pod3
-  hpa["HPA web<br/>min 2 / max 6, CPU 50%<br/>of requests=100m"] -..-> deploy
+  hpa["HPA web<br/>min 3 / max 6, CPU 50%<br/>of requests=100m"] -..-> deploy
   pdb["PDB web<br/>minAvailable 2<br/>voluntary disruptions only"] -..-> pod1
   pdb -..-> pod2
   pdb -..-> pod3
@@ -64,7 +65,7 @@ flowchart LR
 
 | Experiment | Question | Status |
 |---|---|---|
-| [01 Pod failure](experiments/01-pod-failure.md) | What restores capacity when a Pod dies? | PASS |
+| [01 Pod failure](experiments/01-pod-failure.md) | What restores capacity when a Pod dies? | PARTIAL |
 | [02 Readiness failure](experiments/02-readiness-failure.md) | Does readiness failure restart the container? | PASS |
 | [03 Liveness failure](experiments/03-liveness-failure.md) | How does liveness evidence differ? | PASS |
 | [04 Startup probe](experiments/04-startup-probe.md) | What protects slow starts? | PASS |
@@ -74,8 +75,10 @@ flowchart LR
 | [08 Resources](experiments/08-resources.md) | Throttling vs OOMKilled? | PARTIAL |
 
 Validated 2026-09-18 on kind v0.33.0 / Kubernetes v1.37.0 (Docker Desktop,
-Windows). Experiment 08 is PARTIAL: CPU phase validated, OOM probe deliberately
-not run.
+Windows). Experiment 01 is PARTIAL because replacement evidence was captured
+but continuous request success was not recorded. Experiment 08 is PARTIAL:
+CPU/restart behavior was observed, direct throttling metrics and the OOM probe
+were not.
 
 Status definitions: **NOT RUN** (never executed here), **PASS** (observed behavior
 matched hypothesis with quoted evidence), **PARTIAL** (core claim held, some step
@@ -90,8 +93,10 @@ No result is written before it is seen.
 Measured on kind v0.33.0 / Kubernetes v1.37.0 (2026-09-18). Each claim links to
 the experiment holding the raw evidence.
 
-- Deleted Pods are not resurrected — the ReplicaSet creates a *new* Pod, and
-  service continuity comes from surviving Ready endpoints ([01](experiments/01-pod-failure.md)).
+- Deleted Pods are not resurrected — the ReplicaSet creates a *new* Pod. The
+  run recorded surviving Ready endpoints but not a continuous request trace, so
+  service continuity remains unverified in that experiment
+  ([01](experiments/01-pod-failure.md)).
 - Readiness-500 gave `Running` + `Ready=False` + endpoint `ready=false` with
   restartCount unchanged; the identical 500 from liveness gave kill + restart +
   `lastState.terminated` ([02](experiments/02-readiness-failure.md),
@@ -107,10 +112,12 @@ the experiment holding the raw evidence.
   drain (`allowedDisruptions=0`), and did nothing against `kubectl delete pod`
   ([06](experiments/06-pdb.md)).
 - HPA scaled 3->6 at 75%/50% and back 6->5->3 after load; one Pod pinned at
-  453m of a 100m request dominated the average — same load against a 400m
-  request would have read ~20% and scaled nothing ([07](experiments/07-hpa.md)).
-- A Pod held at 499m against its 500m CPU limit was throttled, never killed
-  (restartCount 0->0); memory stayed flat ([08](experiments/08-resources.md),
+  453m of a 100m request dominated the average. A higher request would lower
+  reported utilization for the same observed CPU, but that variant was not run
+  ([07](experiments/07-hpa.md)).
+- One Pod's observed CPU stayed near its 500m limit (499m) with restartCount
+  0->0 and flat memory. This is consistent with CPU limiting, but direct CFS
+  throttling metrics were not collected ([08](experiments/08-resources.md),
   CPU phase only).
 
 ## Kubernetes guarantees and non-guarantees
@@ -118,12 +125,12 @@ the experiment holding the raw evidence.
 | Mechanism | Guarantees | Does NOT guarantee |
 |---|---|---|
 | ReplicaSet controller | Reconciles replica count; creates replacement Pods | Survival of in-flight requests; session/data preservation |
-| readinessProbe | Unready Pods leave Service endpoints (traffic gating) | Restarts, fixes, or drain of in-flight requests |
-| livenessProbe | Wedged containers are eventually restarted | Correct diagnosis; safety against aggressive thresholds |
-| startupProbe | Bounded init window safe from liveness kills | Startup finishing in time; readiness afterwards |
-| RollingUpdate (`maxUnavailable 1`) | At most 1 Pod down at a time during rollout | Zero downtime (long requests, slow readiness still bite) |
-| preStop + grace period | Bounded drain window (30s here) | Infinite patience; ordered endpoint propagation by itself |
-| PDB (`minAvailable 2`) | Floor on simultaneous *voluntary* disruptions | Any protection against crashes / Node loss |
+| readinessProbe | Reports readiness; after propagation, unready endpoints are ineligible for new Service traffic | Immediate convergence, connection draining, restarts, or application repair |
+| livenessProbe | Triggers a container restart after the configured failure threshold | Correct diagnosis, application repair, or availability; aggressive probes can worsen failure |
+| startupProbe | Suppresses readiness/liveness until it succeeds; failure beyond its budget restarts the container | Startup finishing within the budget or readiness afterwards |
+| RollingUpdate (`maxUnavailable 1`) | Limits rollout-caused unavailability to 1 available replica below desired state | Zero downtime or protection from unrelated failures |
+| preStop + grace period | Provides a bounded termination budget shared by the hook and process shutdown (30s here) | Infinite patience or guaranteed ordering of endpoint propagation and signal delivery |
+| PDB (`minAvailable 2`) | Rejects budget-violating voluntary evictions through the Eviction API | Availability, or protection against crashes, direct deletion, probe restarts, or Node loss |
 | HPA (CPU 50% of requests) | Reactive capacity tracking of measured CPU | Instant scaling; correct decisions with wrong requests |
 
 ## ECS vs Kubernetes

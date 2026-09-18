@@ -9,7 +9,8 @@ Only the liveness probe fails. How does the evidence differ from a readiness fai
 kubelet kills and restarts the container (`restartCount` +1, `LastState.Terminated`
 with reason `Error`/`OOMKilled`-style exit), events show `Unhealthy ... Liveness
 probe failed` followed by `Killing`, and brief capacity loss occurs while the
-container restarts. Unlike readiness, this is *process recovery*, not traffic gating.
+container restarts. Unlike readiness, this is a restart mechanism, not traffic
+gating or a guarantee that the application is repaired.
 
 ## Setup
 
@@ -70,7 +71,7 @@ hitless, it is just automatic.
 
 ## What this mechanism guarantees
 
-- Deadlocked/c wedged processes are eventually restarted without human action.
+- After the configured failures, kubelet restarts the container without human action.
 
 ## What it does NOT guarantee
 
@@ -78,6 +79,8 @@ hitless, it is just automatic.
   restart-looping a healthy-but-slow container — see experiment 04).
 - No traffic loss during the restart window.
 - Preservation of local state.
+- Repair of persistent configuration, dependency, or application defects; the
+  same failure may recur after restart.
 
 ## Production implications
 

@@ -1,4 +1,4 @@
-# Experiment 06 — PodDisruptionBudget (voluntary vs involuntary)
+# Experiment 06 — PodDisruptionBudget (Eviction API scope)
 
 ## Question
 
@@ -6,10 +6,13 @@ What does `minAvailable: 2` actually block — and what does it *not* block?
 
 ## Hypothesis
 
-PDB blocks *voluntary* disruptions (`kubectl drain`, rollout evictions beyond
-budget) by refusing eviction when only 2 Pods would remain. It does NOT prevent
-a Pod crash, `kubectl delete pod`, or Node failure — those are involuntary and
-bypass the PDB entirely.
+PDB constrains voluntary disruptions requested through the Eviction API, such
+as `kubectl drain`, by refusing an eviction that would violate the budget. It
+does NOT directly control a normal Deployment rolling update; that uses the
+Deployment's `maxUnavailable`/`maxSurge` strategy. It also does not prevent a
+Pod/container crash, liveness restart, direct `kubectl delete pod`, Node failure,
+or application failure. Direct deletion is not an Eviction API request, so the
+PDB does not gate it.
 
 ## Setup
 
@@ -27,7 +30,7 @@ sleep 20
 kubectl -n reliability-lab get pods -o wide
 kubectl -n reliability-lab get events --sort-by=.lastTimestamp | grep -i "evict\|drain\|disruption" | tail -10
 kubectl uncordon "$NODE"
-# Involuntary: direct Pod delete bypasses PDB
+# Direct deletion bypasses the Eviction API and therefore the PDB
 VICTIM=$(kubectl -n reliability-lab get pods -l app=web -o jsonpath='{.items[0].metadata.name}')
 kubectl -n reliability-lab delete pod "$VICTIM" --now
 kubectl -n reliability-lab get pods
@@ -62,7 +65,8 @@ Baseline: `minAvailable=2`, `allowedDisruptions=1`, 3 Pods Ready.
    not the drain command, set the limit.
 3. `kubectl uncordon` both nodes: Pending Pod scheduled, back to 3 Running.
 4. `kubectl delete pod <victim>`: succeeded **instantly** despite the PDB;
-   ReplicaSet created a replacement. Involuntary path bypasses PDB entirely.
+   ReplicaSet created a replacement. Direct Pod deletion bypasses the Eviction
+   API and therefore the PDB.
 
 ## Explanation
 
@@ -74,16 +78,20 @@ outcomes. A PDB is a budget on voluntary evictions, not an availability shield.
 
 ## What this mechanism guarantees
 
-- A floor on *simultaneously voluntarily-disrupted* Pods (node maintenance, voluntary evictions).
+- The API server rejects an Eviction API request when admitting it would
+  violate the selected Pods' disruption budget.
 
 ## What it does NOT guarantee
 
-- Protection against crashes, failed probes, Node loss, or `delete pod`.
+- Protection against Pod/container crashes, liveness restarts, Node loss,
+  application failure, or direct `delete pod`.
 - Availability by itself: with 3 replicas and `minAvailable: 2`, losing 2 Pods
   to real failures still leaves 1 serving.
 
 ## Production implications
 
 - Always pair PDBs with topology spread / multi-AZ so the "remaining 2" are not on the same Node.
-- `maxUnavailable` in rollout strategy and PDB budgets must be sized together.
+- Deployment rolling updates are governed by `maxUnavailable`/`maxSurge`, not
+  directly by the PDB. Size the Deployment strategy and PDB consistently for
+  the availability objective because they cover different disruption paths.
 - On EKS: PDBs gate Cluster Autoscaler scale-down and node-group upgrades — a too-strict PDB blocks upgrades.

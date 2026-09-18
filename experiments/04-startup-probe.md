@@ -7,10 +7,11 @@ prematurely? With one, is it protected?
 
 ## Hypothesis
 
-Without a startupProbe, the liveness probe (initialDelay 15s) starts failing
-during initialization and restarts the container in a loop, so it never becomes
-Ready. With the startupProbe (60s allowance), liveness/readiness evaluation is
-deferred until `/health` succeeds once, and the Pod becomes Ready normally.
+Initial hypothesis before running: without a startupProbe, the liveness probe
+(initialDelay 15s) would fail during initialization and restart the container.
+With the startupProbe's nominal 60s budget, liveness/readiness evaluation is
+suppressed until `/health` succeeds once. The observations below show why the
+30s no-startup case did not actually restart and the 45s case did.
 
 ## Setup
 
@@ -78,7 +79,9 @@ this experiment is the reason.
 
 ## What this mechanism guarantees
 
-- A bounded initialization window (here 60s) during which liveness cannot kill the container.
+- Liveness and readiness probes are suppressed while startupProbe is still
+  within its configured failure budget; startupProbe failure beyond that
+  budget triggers a container restart.
 
 ## What it does NOT guarantee
 

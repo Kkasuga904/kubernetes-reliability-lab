@@ -12,7 +12,7 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 1 # at most 1 Pod down -> at least 2 serving during rollout
+      maxUnavailable: 1 # rollout may make at most 1 replica unavailable below desired
       maxSurge: 1       # at most 1 extra Pod -> at most 4 total during rollout
   selector:
     matchLabels:
@@ -43,15 +43,15 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
-          # Startup gate: allows up to ~60s of slow initialization before
-          # liveness/readiness are evaluated. Without it, a slow-starting
+          # Startup gate: provides a nominal ~60s startup failure budget while
+          # liveness/readiness are suppressed. Without it, a slow-starting
           # container is killed prematurely (see experiment 04).
           startupProbe:
             httpGet:
               path: /health
               port: http
             periodSeconds: 5
-            failureThreshold: 12 # 5s * 12 = 60s startup allowance
+            failureThreshold: 12 # nominal budget: 5s * 12 = ~60s
           readinessProbe:
             httpGet:
               path: /ready
@@ -59,7 +59,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             successThreshold: 1
-            failureThreshold: 2 # ~10s to be removed from Endpoints
+            failureThreshold: 2 # ~10s to report unready; routing propagation follows
           livenessProbe:
             httpGet:
               path: /health
@@ -69,10 +69,9 @@ spec:
             failureThreshold: 3 # ~30s of failures before restart
           lifecycle:
             preStop:
-              # Decision: keep a short sleep so EndpointSlice removal has time
-              # to propagate to kube-proxy before SIGTERM kills in-flight
-              # requests. Sleeps inside terminationGracePeriodSeconds (30s),
-              # so total budget is still bounded. Remove it and re-run
-              # experiment 05 to see the difference.
+              # Decision: keep a short sleep to give readiness/EndpointSlice
+              # changes time to propagate before the application receives
+              # SIGTERM. Ordering is not guaranteed. The hook and application
+              # shutdown share terminationGracePeriodSeconds (30s).
               exec:
                 command: ["sh", "-c", "sleep 5"]

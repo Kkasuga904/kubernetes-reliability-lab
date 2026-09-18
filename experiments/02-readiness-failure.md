@@ -6,9 +6,10 @@ Only the readiness probe fails. Is the Pod restarted? Does it still receive Serv
 
 ## Hypothesis
 
-The Pod stays `Running` with `Ready=False`, is removed from the Service
-EndpointSlice, and the container is NOT restarted (`restartCount` unchanged),
-because readiness gates *traffic*, not *process lifecycle*.
+The Pod stays `Running` with `Ready=False`; its EndpointSlice entry becomes
+`ready: false` (or may be removed), and the container is NOT restarted
+(`restartCount` unchanged). After that state reaches the data plane, readiness
+controls eligibility for *new* Service traffic, not process lifecycle.
 
 ## Setup
 
@@ -41,8 +42,10 @@ kubectl -n reliability-lab exec "$VICTIM" -- python -c "import urllib.request; p
 
 ## Expected behavior
 
-kubelet stops reporting Ready; EndpointSlice controller removes the endpoint;
-Service traffic goes to the other 2 Pods. No container restart occurs.
+kubelet stops reporting Ready; the EndpointSlice controller marks the endpoint
+unready or removes it. After propagation, new Service traffic is routed to the
+other Ready Pods. Existing connections and in-flight requests are not drained
+by the probe. No container restart occurs.
 
 ## Observed behavior
 
@@ -63,19 +66,24 @@ returned to Ready with restartCount still 0.
 ## Explanation
 
 kubelet stopped reporting Ready; the EndpointSlice controller marked the
-victim's endpoint `ready: false`; kube-proxy stopped sending it *new* Service
-traffic. The container kept running untouched — readiness is a traffic gate
-evaluated by kubelet, not a process supervisor. Contrast with experiment 03,
-where the same 500 from `/health` caused a kill.
+victim's endpoint `ready: false`. Once that state propagated through the
+Service data plane, the endpoint was no longer eligible for *new* Service
+traffic. The experiment did not measure propagation latency or existing
+connection behavior. The container kept running untouched — readiness is not
+a process supervisor. Contrast with experiment 03, where the same 500 from
+`/health` caused a restart.
 
 ## What this mechanism guarantees
 
-- Failing Pods stop receiving *new* Service traffic quickly (~`periodSeconds × failureThreshold`).
+- Probe failure makes a Pod unready; after EndpointSlice and data-plane
+  propagation it is ineligible for new Service traffic.
 
 ## What it does NOT guarantee
 
 - Restarting or fixing the broken process (that is liveness's job).
 - Draining in-flight requests already sent to the Pod.
+- Immediate removal: probe cadence, EndpointSlice updates, kube-proxy or other
+  data-plane propagation, and connection reuse add timing and implementation details.
 - Detection of deep application errors the probe endpoint does not check.
 
 ## Production implications

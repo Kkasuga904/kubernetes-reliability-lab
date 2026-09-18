@@ -93,7 +93,7 @@ def health():
 
 @app.get("/ready")
 def ready():
-    """Readiness endpoint. Failing this removes the Pod from Endpoints (no restart)."""
+    """Readiness endpoint. Failure makes the Pod ineligible for new Service traffic after propagation."""
     result = _probe_status("readiness_fail")
     if isinstance(result, Response):
         log.info("readiness probe FAILED (500)")
