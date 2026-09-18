@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  app-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r app/requirements.txt
+      - run: python -m pytest app/test_main.py -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: app-test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t reliability-lab:ci .
+
+  manifest-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Validate manifests
+        run: kubeconform -strict -summary k8s/namespace.yaml k8s/configmap.yaml k8s/deployment.yaml k8s/service.yaml k8s/pdb.yaml k8s/hpa.yaml
+      - name: Client-side dry run
+        run: |
+          curl -sSL -o kubectl "https://dl.k8s.io/release/$(curl -sSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          for f in namespace configmap deployment service pdb hpa; do ./kubectl apply --dry-run=client -f k8s/$f.yaml; done
+
+  kind-smoke:
+    runs-on: ubuntu-latest
+    needs: [app-test, docker-build, manifest-lint]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.12.0
+        with:
+          config: k8s/kind-config.yaml
+          cluster_name: reliability-lab
+      - run: docker build -t reliability-lab:dev .
+      - run: kind load docker-image reliability-lab:dev --name reliability-lab
+      - name: Install metrics-server (kind)
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+          kubectl -n kube-system patch deployment metrics-server --type=json -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+          kubectl wait --for=condition=Available -n kube-system deployment/metrics-server --timeout=180s
+      - run: bash scripts/deploy.sh
+      - run: bash scripts/run-smoke-test.sh

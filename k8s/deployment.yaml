@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: reliability-lab
+  labels:
+    app: web
+spec:
+  # 3 replicas: one Pod failure still leaves 2 serving; rolling-update
+  # and PDB behavior stay easy to observe (quorum-like, not 1 or 10).
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1 # at most 1 Pod down -> at least 2 serving during rollout
+      maxSurge: 1       # at most 1 extra Pod -> at most 4 total during rollout
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      terminationGracePeriodSeconds: 30 # must exceed uvicorn --timeout-graceful-shutdown 25
+      containers:
+        - name: web
+          image: reliability-lab:dev # built locally, loaded into kind via scripts/load-image.sh
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: STARTUP_DELAY_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: web-config
+                  key: STARTUP_DELAY_SECONDS
+          resources:
+            requests:
+              cpu: 100m     # HPA math base: 50% target = 50m avg; easy to reason about
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          # Startup gate: allows up to ~60s of slow initialization before
+          # liveness/readiness are evaluated. Without it, a slow-starting
+          # container is killed prematurely (see experiment 04).
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12 # 5s * 12 = 60s startup allowance
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 2 # ~10s to be removed from Endpoints
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3 # ~30s of failures before restart
+          lifecycle:
+            preStop:
+              # Decision: keep a short sleep so EndpointSlice removal has time
+              # to propagate to kube-proxy before SIGTERM kills in-flight
+              # requests. Sleeps inside terminationGracePeriodSeconds (30s),
+              # so total budget is still bounded. Remove it and re-run
+              # experiment 05 to see the difference.
+              exec:
+                command: ["sh", "-c", "sleep 5"]

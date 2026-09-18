@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  namespace: reliability-lab
+spec:
+  # With replicas=3, minAvailable=2 tolerates exactly 1 voluntary
+  # disruption (drain, rollout with maxUnavailable=1). It does NOT
+  # protect against crashes / node failures (involuntary disruptions).
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: web

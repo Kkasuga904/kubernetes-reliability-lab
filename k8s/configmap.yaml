@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: reliability-lab
+data:
+  # Kept minimal on purpose: only values the experiments need.
+  LOG_LEVEL: "info"
+  STARTUP_DELAY_SECONDS: "0" # override per-experiment (e.g. startupProbe lab)

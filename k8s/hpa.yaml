@@ -1,0 +1,27 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web
+  namespace: reliability-lab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  # minReplicas=3 keeps the lab's 3-Pod baseline (PDB math stays readable);
+  # scale-down after load therefore returns to 3, not below.
+  minReplicas: 3
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        # Utilization = avg actual CPU / requests.cpu (100m).
+        # Target 50% => ~50m average. Changing requests changes the
+        # meaning of "50%" without changing real load (see exp. 07).
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60 # avoid flapping on brief idle gaps
