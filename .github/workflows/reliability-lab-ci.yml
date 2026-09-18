@@ -38,7 +38,9 @@ jobs:
         run: |
           curl -sSL -o kubectl "https://dl.k8s.io/release/$(curl -sSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl
-          for f in namespace configmap deployment service pdb hpa; do ./kubectl apply --dry-run=client -f k8s/$f.yaml; done
+          # No API server exists in this job. kubeconform performs schema validation
+          # above; this step verifies that kubectl can parse and build each object.
+          for f in namespace configmap deployment service pdb hpa; do ./kubectl apply --dry-run=client --validate=false -f k8s/$f.yaml; done
 
   kind-smoke:
     runs-on: ubuntu-latest
